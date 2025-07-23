@@ -1,0 +1,9 @@
+title: mobile_repair
+description: GitHub Pages site
+theme: jekyll-theme-primer
+
+exclude:
+  - node_modules
+  - vendor
+  - backend/node_modules
+  - frontend/node_modules
