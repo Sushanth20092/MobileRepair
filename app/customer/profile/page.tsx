@@ -18,6 +18,7 @@ import {
   Star,
   LogOut,
   ArrowLeft,
+  Settings,
 } from "lucide-react"
 import Link from "next/link"
 import { useAuth } from "@/contexts/auth-context"
@@ -93,7 +94,12 @@ export default function CustomerProfilePage() {
             <h1 className="text-3xl font-bold">My Profile</h1>
             <p className="text-muted-foreground">Manage your profile and device repairs</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            <Link href="/customer/profile/settings">
+              <Button size="icon" variant="outline" aria-label="Settings">
+                <Settings className="h-5 w-5" />
+              </Button>
+            </Link>
             <Link href="/customer/book-repair">
               <Button size="lg">
                 <Plus className="mr-2 h-4 w-4" />

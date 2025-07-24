@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { motion } from "framer-motion"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -406,6 +406,140 @@ export default function AdminDashboard() {
 
   const [selectedTab, setSelectedTab] = useState("agent-requests");
 
+  // --- MODELS SECTION ---
+  const [modelsCategoryId, setModelsCategoryId] = useState("");
+  const [modelsBrandId, setModelsBrandId] = useState("");
+  const [models, setModels] = useState<any[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelNameInput, setModelNameInput] = useState("");
+  const [addingModel, setAddingModel] = useState(false);
+  const [editingModel, setEditingModel] = useState<any | null>(null);
+  const [editingModelName, setEditingModelName] = useState("");
+  const [deletingModel, setDeletingModel] = useState<any | null>(null);
+  const [modelError, setModelError] = useState("");
+  const [searchError, setSearchError] = useState("");
+
+  // Filter brands for selected category
+  const filteredBrands = modelsCategoryId ? brands.filter((b: any) => b.category_id === modelsCategoryId) : [];
+
+  // Fetch models/devices for selected category & brand reactively
+  const fetchModels = useCallback(async (categoryId?: string, brandId?: string) => {
+    setSearchError("");
+    const catId = (categoryId ?? modelsCategoryId)?.trim();
+    const brId = (brandId ?? modelsBrandId)?.trim();
+    if (!catId || !brId) {
+      setModels([]);
+      setSearchError("Please select both category and brand.");
+      return;
+    }
+    setModelsLoading(true);
+    try {
+      console.log('Fetching models for:', catId, brId);
+      let query = supabase
+        .from("devices")
+        .select("id, model, brand_id, category_id", { count: "exact" })
+        .eq("category_id", catId)
+        .eq("brand_id", brId)
+        .order("model");
+      const { data, error } = await query;
+      console.log('Fetched devices:', data);
+      if (error) {
+        setModels([]);
+        setModelsLoading(false);
+        setSearchError(error.message);
+        return toast({ title: "Error", description: error.message, variant: "destructive" });
+      }
+      if (!Array.isArray(data)) {
+        setModels([]);
+        setModelsLoading(false);
+        setSearchError("Unexpected data format from devices table.");
+        return toast({ title: "Error", description: "Unexpected data format from devices table.", variant: "destructive" });
+      }
+      setModels(data);
+    } catch (err) {
+      setModels([]);
+      setSearchError("Unknown error occurred while fetching models.");
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [modelsCategoryId, modelsBrandId]);
+
+  // Fetch models on filter change
+  useEffect(() => {
+    if (modelsCategoryId && modelsBrandId) {
+      fetchModels(modelsCategoryId, modelsBrandId);
+    } else {
+      setModels([]);
+    }
+  }, [modelsCategoryId, modelsBrandId, fetchModels]);
+
+  // Reset brand when category changes
+  const handleCategoryChange = (val: string) => {
+    setModelsCategoryId(val.trim());
+    setModelsBrandId("");
+  };
+
+  // Add model
+  const handleAddModel = async () => {
+    setModelError("");
+    if (!modelNameInput.trim() || !modelsCategoryId || !modelsBrandId) {
+      setModelError("Model name, category, and brand are required");
+      return;
+    }
+    if (models.some(m => m.model.trim().toLowerCase() === modelNameInput.trim().toLowerCase())) {
+      setModelError("Model already exists for this brand/category");
+      return;
+    }
+    setAddingModel(true);
+    const { error } = await supabase.from("devices").insert([{ model: modelNameInput.trim(), category_id: modelsCategoryId, brand_id: modelsBrandId }]);
+    if (error) {
+      setModelError(error.message);
+      setAddingModel(false);
+      return toast({ title: "Error", description: error.message, variant: "destructive" });
+    }
+    setModelNameInput("");
+    setAddingModel(false);
+    toast({ title: "Success", description: "Model added" });
+    await fetchModels();
+  };
+
+  // Edit model
+  const handleEditModel = async () => {
+    if (!editingModel || !editingModelName.trim()) return;
+    if (models.some(m => m.model.trim().toLowerCase() === editingModelName.trim().toLowerCase() && m.id !== editingModel.id)) {
+      setModelError("Model already exists for this brand/category");
+      return;
+    }
+    setAddingModel(true);
+    const { error } = await supabase.from("devices").update({ model: editingModelName.trim() }).eq("id", editingModel.id);
+    if (error) {
+      setModelError(error.message);
+      setAddingModel(false);
+      return toast({ title: "Error", description: error.message, variant: "destructive" });
+    }
+    setEditingModel(null);
+    setEditingModelName("");
+    setAddingModel(false);
+    toast({ title: "Success", description: "Model updated" });
+    await fetchModels();
+  };
+
+  // Delete model
+  const handleDeleteModel = async () => {
+    if (!deletingModel) return;
+    setAddingModel(true);
+    const { error } = await supabase.from("devices").delete().eq("id", deletingModel.id);
+    if (error) {
+      setModelError(error.message);
+      setAddingModel(false);
+      return toast({ title: "Error", description: error.message, variant: "destructive" });
+    }
+    setDeletingModel(null);
+    setAddingModel(false);
+    toast({ title: "Success", description: "Model deleted" });
+    await fetchModels();
+  };
+
   useEffect(() => {
     const fetchStats = async () => {
       try {
@@ -788,6 +922,73 @@ export default function AdminDashboard() {
     setFaultsTabFaults(data || []);
   };
 
+  // ... inside AdminDashboard, after other tabs state ...
+  const [durationTypes, setDurationTypes] = useState<any[]>([]);
+  const [durationLoading, setDurationLoading] = useState(false);
+  const [editingDuration, setEditingDuration] = useState<any | null>(null);
+  const [editDurationForm, setEditDurationForm] = useState({ name: '', label: '', description: '', extra_charge: '' });
+  const [durationError, setDurationError] = useState("");
+
+  // Fetch durations
+  const fetchDurations = useCallback(async () => {
+    setDurationLoading(true);
+    const { data, error } = await supabase.from('duration_types').select('id, name, label, description, extra_charge, is_active, created_at, updated_at').order('created_at');
+    if (error) {
+      setDurationTypes([]);
+      setDurationLoading(false);
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      return;
+    }
+    setDurationTypes(data || []);
+    setDurationLoading(false);
+  }, [toast]);
+
+  useEffect(() => {
+    if (selectedTab === 'durations') fetchDurations();
+  }, [selectedTab, fetchDurations]);
+
+  const handleEditDuration = (duration: any) => {
+    setEditingDuration(duration);
+    setEditDurationForm({
+      name: duration.name || '',
+      label: duration.label || '',
+      description: duration.description || '',
+      extra_charge: duration.extra_charge?.toString() || '0',
+    });
+    setDurationError("");
+  };
+
+  const handleSaveDuration = async () => {
+    if (!editDurationForm.name.trim() || !editDurationForm.label.trim()) {
+      setDurationError('Name and label are required.');
+      return;
+    }
+    const extraCharge = parseFloat(editDurationForm.extra_charge);
+    if (isNaN(extraCharge) || extraCharge < 0) {
+      setDurationError('Extra charge must be a non-negative number.');
+      return;
+    }
+    setDurationLoading(true);
+    const { error } = await supabase.from('duration_types').update({
+      name: editDurationForm.name.trim(),
+      label: editDurationForm.label.trim(),
+      description: editDurationForm.description,
+      extra_charge: extraCharge,
+    }).eq('id', editingDuration.id);
+    if (error) {
+      setDurationError(error.message);
+      setDurationLoading(false);
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      return;
+    }
+    setEditingDuration(null);
+    setEditDurationForm({ name: '', label: '', description: '', extra_charge: '' });
+    setDurationError("");
+    setDurationLoading(false);
+    toast({ title: 'Success', description: 'Duration updated.' });
+    fetchDurations();
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -810,67 +1011,6 @@ export default function AdminDashboard() {
               Logout
             </button>
           </div>
-        </div>
-
-        {/* Add Device Button */}
-        <div className="flex justify-end">
-          <Dialog open={showAddDevice} onOpenChange={setShowAddDevice}>
-            <DialogTrigger asChild>
-              <Button variant="default">+ Add Device</Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Add Device</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <Select value={deviceForm.category} onValueChange={val => setDeviceForm(f => ({ ...f, category: val, brand: "", model: "" }))}>
-                  <SelectTrigger>
-                    <SelectValue placeholder={categoryLoading ? "Loading..." : "Select category"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {categories.map(cat => (
-                      <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select
-                  value={deviceForm.brand === "__new__" ? "__new__" : deviceForm.brand}
-                  onValueChange={val => {
-                    setBrandError("");
-                    setDeviceForm(f => ({ ...f, brand: val }));
-                    if (val !== "__new__") setNewBrand("");
-                  }}
-                  disabled={!deviceForm.category || brandLoading}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder={brandLoading ? "Loading..." : "Select brand"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {brands.map(brand => (
-                      <SelectItem key={brand.id} value={brand.id}>{brand.name}</SelectItem>
-                    ))}
-                    <SelectItem value="__new__">Add new brand...</SelectItem>
-                  </SelectContent>
-                </Select>
-                {deviceForm.brand === "__new__" && (
-                  <Input
-                    placeholder="Enter new model name"
-                    value={newBrand}
-                    onChange={e => setNewBrand(e.target.value)}
-                    className={brandError ? "border-red-500" : ""}
-                  />
-                )}
-                <Input placeholder="model name" value={deviceForm.model} onChange={e => setDeviceForm(f => ({ ...f, model: e.target.value }))} />
-                {brandError && <div className="text-red-500 text-sm">{brandError}</div>}
-              </div>
-              <DialogFooter>
-                <Button onClick={handleAddDevice} disabled={addingDevice}>{addingDevice ? "Adding..." : "Add Device"}</Button>
-                <DialogClose asChild>
-                  <Button variant="outline">Cancel</Button>
-                </DialogClose>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
         </div>
 
         {/* Stats Cards */}
@@ -919,13 +1059,15 @@ export default function AdminDashboard() {
 
         {/* Main Content Tabs */}
         <Tabs value={selectedTab} onValueChange={setSelectedTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-6">
+          <TabsList className="grid w-full grid-cols-8">
             <TabsTrigger value="agent-requests">Agent Requests ({loading ? "..." : stats?.pendingAgents ?? 0})</TabsTrigger>
             <TabsTrigger value="agents">Agents</TabsTrigger>
             <TabsTrigger value="bookings">All Bookings</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
             <TabsTrigger value="faults">Faults Management</TabsTrigger>
             <TabsTrigger value="cities">City Management</TabsTrigger>
+            <TabsTrigger value="devices">Device Management</TabsTrigger>
+            <TabsTrigger value="durations">Duration Management</TabsTrigger>
           </TabsList>
 
           {/* Agent Requests Tab */}
@@ -1441,6 +1583,69 @@ export default function AdminDashboard() {
           <TabsContent value="cities" className="space-y-4">
             <CityManagement />
           </TabsContent>
+
+          {/* Device Management Tab */}
+          <TabsContent value="devices" className="space-y-4">
+            <DeviceManagement />
+          </TabsContent>
+
+          {/* Duration Management Tab */}
+          <TabsContent value="durations" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Duration Management</CardTitle>
+                <CardDescription>Manage duration types for bookings</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {durationLoading ? (
+                  <div>Loading durations...</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full border text-sm">
+                      <thead>
+                        <tr className="bg-muted">
+                          <th className="px-2 py-1 text-left">Name</th>
+                          <th className="px-2 py-1 text-left">Label</th>
+                          <th className="px-2 py-1 text-left">Description</th>
+                          <th className="px-2 py-1 text-left">Extra Charge</th>
+                          <th className="px-2 py-1 text-left">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {durationTypes.map(duration => (
+                          <tr key={duration.id}>
+                            <td className="px-2 py-1">{duration.name}</td>
+                            <td className="px-2 py-1">{duration.label}</td>
+                            <td className="px-2 py-1">{duration.description}</td>
+                            <td className="px-2 py-1">{duration.extra_charge}</td>
+                            <td className="px-2 py-1">
+                              <Button size="icon" variant="ghost" onClick={() => handleEditDuration(duration)}><Pencil className="h-4 w-4" /></Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <Dialog open={!!editingDuration} onOpenChange={open => { if (!open) setEditingDuration(null); }}>
+                  <DialogContent>
+                    <DialogHeader><DialogTitle>Edit Duration</DialogTitle></DialogHeader>
+                    <div className="space-y-3">
+                      <Input placeholder="Name" value={editDurationForm.name} onChange={e => setEditDurationForm(f => ({ ...f, name: e.target.value }))} />
+                      <Input placeholder="Label" value={editDurationForm.label} onChange={e => setEditDurationForm(f => ({ ...f, label: e.target.value }))} />
+                      <textarea className="w-full border rounded p-2" placeholder="Description" value={editDurationForm.description} onChange={e => setEditDurationForm(f => ({ ...f, description: e.target.value }))} />
+                      <Input type="number" min={0} placeholder="Extra Charge" value={editDurationForm.extra_charge} onChange={e => setEditDurationForm(f => ({ ...f, extra_charge: e.target.value }))} />
+                      {durationError && <div className="text-red-500 text-sm mt-1">{durationError}</div>}
+                    </div>
+                    <DialogFooter>
+                      <Button onClick={handleSaveDuration} disabled={durationLoading}>{durationLoading ? "Saving..." : "Save"}</Button>
+                      <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </CardContent>
+            </Card>
+          </TabsContent>
         </Tabs>
       </div>
       {/* Reject confirmation modal */}
@@ -1578,5 +1783,392 @@ function AgentsTable({ agents, cities, getCityName }: { agents: any[], cities: a
         </tbody>
       </table>
     </div>
+  );
+}
+
+function DeviceManagement() {
+  // --- Categories State ---
+  const [categories, setCategories] = useState<any[]>([]);
+  const [categoryName, setCategoryName] = useState("");
+  const [editingCategory, setEditingCategory] = useState<any | null>(null);
+  const [deletingCategory, setDeletingCategory] = useState<any | null>(null);
+  const [categoryLoading, setCategoryLoading] = useState(false);
+  // --- Brands State ---
+  const [brands, setBrands] = useState<any[]>([]);
+  const [brandName, setBrandName] = useState("");
+  const [brandCategoryId, setBrandCategoryId] = useState("");
+  const [editingBrand, setEditingBrand] = useState<any | null>(null);
+  const [deletingBrand, setDeletingBrand] = useState<any | null>(null);
+  const [brandLoading, setBrandLoading] = useState(false);
+  // --- Models/Devices State ---
+  const [devices, setDevices] = useState<any[]>([]);
+  const [modelName, setModelName] = useState("");
+  const [modelCategoryId, setModelCategoryId] = useState("");
+  const [modelBrandId, setModelBrandId] = useState("");
+  const [editingDevice, setEditingDevice] = useState<any | null>(null);
+  const [deletingDevice, setDeletingDevice] = useState<any | null>(null);
+  const [deviceLoading, setDeviceLoading] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  // --- Toast ---
+  const { toast } = useToast();
+
+  // --- Fetch Data ---
+  const fetchCategories = useCallback(async () => {
+    setCategoryLoading(true);
+    const { data } = await supabase.from("categories").select("*").order("name");
+    setCategories(data || []);
+    setCategoryLoading(false);
+  }, []);
+  const fetchBrands = useCallback(async () => {
+    setBrandLoading(true);
+    const { data } = await supabase.from("brands").select("*").order("name");
+    setBrands(data || []);
+    setBrandLoading(false);
+  }, []);
+  // Fetch models/devices for current filter
+  const fetchDevices = useCallback(async (categoryId?: string, brandId?: string) => {
+    setModelsLoading(true);
+    let query = supabase.from("devices").select("*, brand:brands(name, category_id), category:categories(name)").order("model");
+    if (categoryId) query = query.eq("category_id", categoryId);
+    if (brandId) query = query.eq("brand_id", brandId);
+    const { data, error } = await query;
+    if (error) {
+      setDevices([]);
+      setModelsLoading(false);
+      return;
+    }
+    setDevices(data || []);
+    setModelsLoading(false);
+  }, []);
+
+  useEffect(() => { fetchCategories(); fetchBrands(); }, [fetchCategories, fetchBrands]);
+  // Fetch all models on mount or when filters change
+  useEffect(() => {
+    fetchDevices(modelCategoryId || undefined, modelBrandId || undefined);
+  }, [fetchDevices, modelCategoryId, modelBrandId]);
+
+  // --- Category CRUD ---
+  const handleAddCategory = async () => {
+    if (!categoryName.trim()) return toast({ title: "Error", description: "Category name required", variant: "destructive" });
+    if (categories.some(c => c.name.toLowerCase() === categoryName.trim().toLowerCase())) return toast({ title: "Duplicate", description: "Category already exists", variant: "destructive" });
+    setCategoryLoading(true);
+    const { error } = await supabase.from("categories").insert([{ name: categoryName.trim() }]);
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else toast({ title: "Success", description: "Category added" });
+    setCategoryName("");
+    fetchCategories();
+    setCategoryLoading(false);
+  };
+  const handleEditCategory = async () => {
+    if (!editingCategory || !editingCategory.name.trim()) return;
+    if (categories.some(c => c.name.toLowerCase() === editingCategory.name.trim().toLowerCase() && c.id !== editingCategory.id)) return toast({ title: "Duplicate", description: "Category already exists", variant: "destructive" });
+    setCategoryLoading(true);
+    const { error } = await supabase.from("categories").update({ name: editingCategory.name.trim() }).eq("id", editingCategory.id);
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else toast({ title: "Success", description: "Category updated" });
+    setEditingCategory(null);
+    fetchCategories();
+    setCategoryLoading(false);
+  };
+  const handleDeleteCategory = async () => {
+    if (!deletingCategory) return;
+    // Check for brands/models under this category
+    if (brands.some(b => b.category_id === deletingCategory.id) || devices.some(d => d.category_id === deletingCategory.id)) {
+      toast({ title: "Cannot Delete", description: "Remove all brands and models under this category first", variant: "destructive" });
+      setDeletingCategory(null);
+      return;
+    }
+    setCategoryLoading(true);
+    const { error } = await supabase.from("categories").delete().eq("id", deletingCategory.id);
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else toast({ title: "Success", description: "Category deleted" });
+    setDeletingCategory(null);
+    fetchCategories();
+    setCategoryLoading(false);
+  };
+
+  // --- Brand CRUD ---
+  const handleAddBrand = async () => {
+    if (!brandName.trim() || !brandCategoryId) return toast({ title: "Error", description: "Brand name and category required", variant: "destructive" });
+    if (brands.some(b => b.name.toLowerCase() === brandName.trim().toLowerCase() && b.category_id === brandCategoryId)) return toast({ title: "Duplicate", description: "Brand already exists in this category", variant: "destructive" });
+    setBrandLoading(true);
+    const { error } = await supabase.from("brands").insert([{ name: brandName.trim(), category_id: brandCategoryId }]);
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else toast({ title: "Success", description: "Brand added" });
+    setBrandName("");
+    setBrandCategoryId("");
+    fetchBrands();
+    setBrandLoading(false);
+  };
+  const handleEditBrand = async () => {
+    if (!editingBrand || !editingBrand.name.trim() || !editingBrand.category_id) return;
+    if (brands.some(b => b.name.toLowerCase() === editingBrand.name.trim().toLowerCase() && b.category_id === editingBrand.category_id && b.id !== editingBrand.id)) return toast({ title: "Duplicate", description: "Brand already exists in this category", variant: "destructive" });
+    setBrandLoading(true);
+    const { error } = await supabase.from("brands").update({ name: editingBrand.name.trim(), category_id: editingBrand.category_id }).eq("id", editingBrand.id);
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else toast({ title: "Success", description: "Brand updated" });
+    setEditingBrand(null);
+    fetchBrands();
+    setBrandLoading(false);
+  };
+  const handleDeleteBrand = async () => {
+    if (!deletingBrand) return;
+    // Check for models under this brand
+    if (devices.some(d => d.brand_id === deletingBrand.id)) {
+      toast({ title: "Cannot Delete", description: "Remove all models under this brand first", variant: "destructive" });
+      setDeletingBrand(null);
+      return;
+    }
+    setBrandLoading(true);
+    const { error } = await supabase.from("brands").delete().eq("id", deletingBrand.id);
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else toast({ title: "Success", description: "Brand deleted" });
+    setDeletingBrand(null);
+    fetchBrands();
+    setBrandLoading(false);
+  };
+
+  // --- Device/Model CRUD ---
+  const handleAddDevice = async () => {
+    if (!modelName.trim() || !modelBrandId) return toast({ title: "Error", description: "Model and brand required", variant: "destructive" });
+    if (devices.some(d => d.model.trim().toLowerCase() === modelName.trim().toLowerCase())) return toast({ title: "Duplicate", description: "Model already exists for this brand/category", variant: "destructive" });
+    setDeviceLoading(true);
+    const insertObj: any = { model: modelName.trim(), brand_id: modelBrandId };
+    if (modelCategoryId) insertObj.category_id = modelCategoryId;
+    const { error } = await supabase.from("devices").insert([insertObj]);
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else toast({ title: "Success", description: "Model added" });
+    setModelName("");
+    setModelCategoryId("");
+    setModelBrandId("");
+    fetchDevices(modelCategoryId || undefined, modelBrandId || undefined);
+    setDeviceLoading(false);
+  };
+  const handleEditDevice = async () => {
+    if (!editingDevice || !editingDevice.model.trim() || !editingDevice.brand_id) return;
+    if (devices.some(d => d.model.trim().toLowerCase() === editingDevice.model.trim().toLowerCase() && d.id !== editingDevice.id)) return toast({ title: "Duplicate", description: "Model already exists for this brand/category", variant: "destructive" });
+    setDeviceLoading(true);
+    const updateObj: any = { model: editingDevice.model.trim(), brand_id: editingDevice.brand_id };
+    if (editingDevice.category_id) updateObj.category_id = editingDevice.category_id;
+    const { error } = await supabase.from("devices").update(updateObj).eq("id", editingDevice.id);
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else toast({ title: "Success", description: "Model updated" });
+    setEditingDevice(null);
+    fetchDevices(modelCategoryId || undefined, modelBrandId || undefined);
+    setDeviceLoading(false);
+  };
+  const handleDeleteDevice = async () => {
+    if (!deletingDevice) return;
+    setDeviceLoading(true);
+    const { error } = await supabase.from("devices").delete().eq("id", deletingDevice.id);
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else toast({ title: "Success", description: "Model deleted" });
+    setDeletingDevice(null);
+    fetchDevices(modelCategoryId || undefined, modelBrandId || undefined);
+    setDeviceLoading(false);
+  };
+
+  // --- UI ---
+  return (
+    <Card className="mb-8">
+      <CardHeader>
+        <CardTitle>Device Management</CardTitle>
+        <CardDescription>Manage device categories, brands, and models</CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-visible space-y-8">
+        {/* Categories Section */}
+        <div>
+          <h3 className="text-lg font-semibold mb-2">Categories</h3>
+          <form className="flex gap-2 mb-2" onSubmit={e => { e.preventDefault(); handleAddCategory(); }}>
+            <Input value={categoryName} onChange={e => setCategoryName(e.target.value)} placeholder="Add new category" />
+            <Button type="submit" disabled={categoryLoading}>Add</Button>
+          </form>
+          <table className="min-w-full border text-sm mb-4">
+            <thead>
+              <tr className="bg-muted">
+                <th className="px-2 py-1 text-left">Name</th>
+                <th className="px-2 py-1 text-left">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {categories.map(cat => (
+                <tr key={cat.id}>
+                  <td className="px-2 py-1">{cat.name}</td>
+                  <td className="px-2 py-1 flex gap-2">
+                    <Button size="icon" variant="ghost" onClick={() => setEditingCategory({ ...cat })}><Pencil className="h-4 w-4" /></Button>
+                    <Button size="icon" variant="ghost" onClick={() => setDeletingCategory(cat)}><Trash2 className="h-4 w-4 text-red-500" /></Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {/* Brands Section */}
+        <div>
+          <h3 className="text-lg font-semibold mb-2">Brands</h3>
+          <form className="flex gap-2 mb-2" onSubmit={e => { e.preventDefault(); handleAddBrand(); }}>
+            <Select value={brandCategoryId} onValueChange={setBrandCategoryId} required>
+              <SelectTrigger className="w-48"><SelectValue placeholder="Select category" /></SelectTrigger>
+              <SelectContent>
+                {categories.map(cat => <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Input value={brandName} onChange={e => setBrandName(e.target.value)} placeholder="Add new brand" />
+            <Button type="submit" disabled={brandLoading}>Add</Button>
+          </form>
+          <table className="min-w-full border text-sm mb-4">
+            <thead>
+              <tr className="bg-muted">
+                <th className="px-2 py-1 text-left">Name</th>
+                <th className="px-2 py-1 text-left">Category</th>
+                <th className="px-2 py-1 text-left">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {brands.map(brand => (
+                <tr key={brand.id}>
+                  <td className="px-2 py-1">{brand.name}</td>
+                  <td className="px-2 py-1">{categories.find(c => c.id === brand.category_id)?.name || ""}</td>
+                  <td className="px-2 py-1 flex gap-2">
+                    <Button size="icon" variant="ghost" onClick={() => setEditingBrand({ ...brand })}><Pencil className="h-4 w-4" /></Button>
+                    <Button size="icon" variant="ghost" onClick={() => setDeletingBrand(brand)}><Trash2 className="h-4 w-4 text-red-500" /></Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {/* Models/Devices Section */}
+        <div>
+          <h3 className="text-lg font-semibold mb-2">Models</h3>
+          <form className="flex gap-2 mb-2" onSubmit={e => { e.preventDefault(); handleAddDevice(); }}>
+            <Select value={modelCategoryId} onValueChange={val => { setModelCategoryId(val); setModelBrandId(""); }}>
+              <SelectTrigger className="w-48"><SelectValue placeholder="Select category (optional)" /></SelectTrigger>
+              <SelectContent>
+                {categories.map(cat => <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={modelBrandId} onValueChange={setModelBrandId} disabled={!modelCategoryId}>
+              <SelectTrigger className="w-48"><SelectValue placeholder="Select brand (optional)" /></SelectTrigger>
+              <SelectContent>
+                {brands.filter(b => !modelCategoryId || b.category_id === modelCategoryId).map(brand => <SelectItem key={brand.id} value={brand.id}>{brand.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Input value={modelName} onChange={e => setModelName(e.target.value)} placeholder="Add new model" />
+            <Button type="submit" disabled={deviceLoading}>Add</Button>
+          </form>
+          <div className="min-w-full border text-sm mb-4">
+            <table className="min-w-full border text-sm">
+              <thead>
+                <tr className="bg-muted">
+                  <th className="px-2 py-1 text-left">Model</th>
+                  <th className="px-2 py-1 text-left">Brand</th>
+                  <th className="px-2 py-1 text-left">Category</th>
+                  <th className="px-2 py-1 text-left">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {modelsLoading ? (
+                  <tr><td colSpan={4} className="text-center py-4">Loading models...</td></tr>
+                ) : devices.length === 0 ? (
+                  <tr><td colSpan={4} className="text-center py-4">No models found for the selected filter.</td></tr>
+                ) : (
+                  devices.map(device => (
+                    <tr key={device.id}>
+                      <td className="px-2 py-1">{device.model}</td>
+                      <td className="px-2 py-1">{brands.find(b => b.id === device.brand_id)?.name || ""}</td>
+                      <td className="px-2 py-1">{categories.find(c => c.id === device.category_id)?.name || ""}</td>
+                      <td className="px-2 py-1 flex gap-2">
+                        <Button size="icon" variant="ghost" onClick={() => setEditingDevice({ ...device })}><Pencil className="h-4 w-4" /></Button>
+                        <Button size="icon" variant="ghost" onClick={() => setDeletingDevice(device)}><Trash2 className="h-4 w-4 text-red-500" /></Button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {/* Edit/Delete Dialogs for Category, Brand, Device */}
+        <Dialog open={!!editingCategory} onOpenChange={open => { if (!open) setEditingCategory(null); }}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Edit Category</DialogTitle></DialogHeader>
+            <Input value={editingCategory?.name || ""} onChange={e => setEditingCategory((c: any) => ({ ...c, name: e.target.value }))} />
+            <DialogFooter>
+              <Button onClick={handleEditCategory} disabled={categoryLoading}>Save</Button>
+              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={!!deletingCategory} onOpenChange={open => { if (!open) setDeletingCategory(null); }}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Delete Category</DialogTitle></DialogHeader>
+            <div>Are you sure you want to delete <b>{deletingCategory?.name}</b>? This cannot be undone.</div>
+            <DialogFooter>
+              <Button onClick={handleDeleteCategory} disabled={categoryLoading}>Delete</Button>
+              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={!!editingBrand} onOpenChange={open => { if (!open) setEditingBrand(null); }}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Edit Brand</DialogTitle></DialogHeader>
+            <Select value={editingBrand?.category_id || ""} onValueChange={val => setEditingBrand((b: any) => ({ ...b, category_id: val }))} required>
+              <SelectTrigger className="w-48"><SelectValue placeholder="Select category" /></SelectTrigger>
+              <SelectContent>
+                {categories.map(cat => <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Input value={editingBrand?.name || ""} onChange={e => setEditingBrand((b: any) => ({ ...b, name: e.target.value }))} />
+            <DialogFooter>
+              <Button onClick={handleEditBrand} disabled={brandLoading}>Save</Button>
+              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={!!deletingBrand} onOpenChange={open => { if (!open) setDeletingBrand(null); }}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Delete Brand</DialogTitle></DialogHeader>
+            <div>Are you sure you want to delete <b>{deletingBrand?.name}</b>? This cannot be undone.</div>
+            <DialogFooter>
+              <Button onClick={handleDeleteBrand} disabled={brandLoading}>Delete</Button>
+              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={!!editingDevice} onOpenChange={open => { if (!open) setEditingDevice(null); }}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Edit Model</DialogTitle></DialogHeader>
+            <Select value={editingDevice?.category_id || ""} onValueChange={val => setEditingDevice((d: any) => ({ ...d, category_id: val }))} required>
+              <SelectTrigger className="w-48"><SelectValue placeholder="Select category" /></SelectTrigger>
+              <SelectContent>
+                {categories.map(cat => <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={editingDevice?.brand_id || ""} onValueChange={val => setEditingDevice((d: any) => ({ ...d, brand_id: val }))} required>
+              <SelectTrigger className="w-48"><SelectValue placeholder="Select brand" /></SelectTrigger>
+              <SelectContent>
+                {brands.filter(b => b.category_id === editingDevice?.category_id).map(brand => <SelectItem key={brand.id} value={brand.id}>{brand.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Input value={editingDevice?.model || ""} onChange={e => setEditingDevice((d: any) => ({ ...d, model: e.target.value }))} />
+            <DialogFooter>
+              <Button onClick={handleEditDevice} disabled={deviceLoading}>Save</Button>
+              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={!!deletingDevice} onOpenChange={open => { if (!open) setDeletingDevice(null); }}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Delete Model</DialogTitle></DialogHeader>
+            <div>Are you sure you want to delete <b>{deletingDevice?.model}</b>? This cannot be undone.</div>
+            <DialogFooter>
+              <Button onClick={handleDeleteDevice} disabled={deviceLoading}>Delete</Button>
+              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </CardContent>
+    </Card>
   );
 }

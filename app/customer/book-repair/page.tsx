@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { motion } from "framer-motion"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -199,6 +199,19 @@ export default function BookRepairPage() {
   const [showDraftBanner, setShowDraftBanner] = useState(false);
   const [draft, setDraft] = useState<any>(null);
 
+  // Replace getMinDate and getMaxDate with client-safe state
+  const [minDate, setMinDate] = useState<Date | null>(null);
+  const [maxDate, setMaxDate] = useState<Date | null>(null);
+
+  useEffect(() => {
+    // Only run on client
+    const today = new Date();
+    setMinDate(today);
+    const max = new Date(today);
+    max.setDate(today.getDate() + 2);
+    setMaxDate(max);
+  }, []);
+
   useEffect(() => {
     // Fetch states
     supabase.from('states').select('*').then(({ data, error }) => {
@@ -253,40 +266,64 @@ export default function BookRepairPage() {
     });
   }, []);
 
+  // Add local cache for categories and brands
+  const categoriesCache = useRef<Category[] | null>(null);
+  const brandsCache = useRef<{ [categoryId: string]: Brand[] } | null>(null);
+
+  // Fetch categories with cache
   useEffect(() => {
+    if (categoriesCache.current) {
+      setCategories(categoriesCache.current);
+      setCategoryLoading(false);
+      return;
+    }
     setCategoryLoading(true);
-    supabase.from('categories').select('*').then(({ data }) => {
-      setCategories(data || []);
+    supabase.from('categories').select('id, name').then(({ data, error }) => {
+      if (data) {
+        setCategories(data);
+        categoriesCache.current = data;
+      } else {
+        setCategories([]);
+      }
       setCategoryLoading(false);
     });
   }, []);
 
+  // Fetch brands with cache
   useEffect(() => {
-    if (formData.category) {
-      setBrandLoading(true);
-      supabase.from('brands').select('*').eq('category_id', formData.category).then(({ data }) => {
-        setBrands(data || []);
-        setBrandLoading(false);
-      });
-    } else {
+    if (!formData.category) {
       setBrands([]);
+      return;
     }
+    if (brandsCache.current && brandsCache.current[formData.category]) {
+      setBrands(brandsCache.current[formData.category]);
+      setBrandLoading(false);
+      return;
+    }
+    setBrandLoading(true);
+    supabase.from('brands').select('id, name, category_id').eq('category_id', formData.category).then(({ data, error }) => {
+      if (data) {
+        setBrands(data);
+        if (!brandsCache.current) brandsCache.current = {};
+        brandsCache.current[formData.category] = data;
+      } else {
+        setBrands([]);
+      }
+      setBrandLoading(false);
+    });
   }, [formData.category]);
 
-  // Fetch models when category and brand are selected
+  // Fetch models/devices with precise columns and filters
   useEffect(() => {
     if (formData.category && formData.brand) {
       setModelsLoading(true);
-      fetch(`/api/devices?category_id=${formData.category}&brand_id=${formData.brand}`)
-        .then(res => res.json())
-        .then(data => {
-          setModels(data.models || []);
-          setModelsLoading(false);
-        })
-        .catch(() => {
-          setModels([]);
-          setModelsLoading(false);
-        });
+      fetch(`/api/devices?category_id=${formData.category}&brand_id=${formData.brand}&select=id,model`).then(res => res.json()).then(data => {
+        setModels(data.models || []);
+        setModelsLoading(false);
+      }).catch(() => {
+        setModels([]);
+        setModelsLoading(false);
+      });
     } else {
       setModels([]);
     }
@@ -311,23 +348,31 @@ export default function BookRepairPage() {
     }
   }, [formData.category, formData.brand, formData.model]);
 
-  // Fetch faults when deviceId changes
+  // Fetch faults with precise columns and error state
+  const [faultsError, setFaultsError] = useState("");
   useEffect(() => {
     if (deviceId) {
       setFaultsLoading(true);
-      supabase
-        .from('faults')
-        .select('id, name, price')
-        .eq('device_id', deviceId)
-        .eq('is_active', true)
-        .then(({ data }) => {
+      setFaultsError("");
+      supabase.from('faults').select('id, name, price').eq('device_id', deviceId).eq('is_active', true).then(({ data, error }) => {
+        if (error) {
+          setFaults([]);
+          setFaultsError("Failed to load faults");
+        } else {
           setFaults(data || []);
-          setFaultsLoading(false);
-        });
+          setFaultsError("");
+        }
+        setFaultsLoading(false);
+      });
     } else {
       setFaults([]);
+      setFaultsError("");
     }
   }, [deviceId]);
+
+  // Memoize filtered lists
+  const memoizedModels = useMemo(() => models, [models]);
+  const memoizedFaults = useMemo(() => faults, [faults]);
 
   // Filter agents when service type changes to local_dropoff
   useEffect(() => {
@@ -388,18 +433,6 @@ export default function BookRepairPage() {
     return times
   }
 
-  const getMinDate = () => {
-    const today = new Date()
-    return today
-  }
-
-  const getMaxDate = () => {
-    const today = new Date()
-    const maxDate = new Date(today)
-    maxDate.setDate(today.getDate() + 2)
-    return maxDate
-  }
-
   // Calculate total price: sum of selected faults + duration price
   const calculatePrice = () => {
     const faultsTotal = selectedFaults.reduce((sum, fault) => sum + (fault.price || 0), 0);
@@ -423,14 +456,15 @@ export default function BookRepairPage() {
     return distanceMiles;
   };
 
-  // Filter and sort agents for Local Dropoff
+  // Filter and sort agents for Local Dropoff, Postal Service, and Collection & Delivery
   const filterAgentsForLocalDropoff = async () => {
+    setAgentsLoading(true);
+    setFilteredAgents([]);
+    setFormData(f => ({ ...f, selectedAgent: "" }));
     if (!formData.city_id || !formData.address_latitude || !formData.address_longitude) {
-      setFilteredAgents([]);
+      setAgentsLoading(false);
       return;
     }
-
-    setAgentsLoading(true);
     try {
       const { data: agents, error } = await supabase
         .from('agents')
@@ -440,14 +474,11 @@ export default function BookRepairPage() {
         .eq('is_online', true)
         .not('latitude', 'is', null)
         .not('longitude', 'is', null);
-
       if (error) {
-        console.error('Error fetching agents:', error);
         setFilteredAgents([]);
+        setAgentsLoading(false);
         return;
       }
-
-      // Calculate distances and sort by distance
       const agentsWithDistance = (agents || []).map(agent => ({
         ...agent,
         distance: calculateDistance(
@@ -457,15 +488,28 @@ export default function BookRepairPage() {
           agent.longitude
         )
       })).sort((a, b) => (a.distance || 0) - (b.distance || 0));
-
       setFilteredAgents(agentsWithDistance);
     } catch (error) {
-      console.error('Error filtering agents:', error);
       setFilteredAgents([]);
     } finally {
       setAgentsLoading(false);
     }
   };
+
+  // Always trigger agent fetch on address/city change (even when navigating back)
+  useEffect(() => {
+    if (
+      formData.serviceType === "local_dropoff" ||
+      formData.serviceType === "postal" ||
+      formData.serviceType === "collection_delivery"
+    ) {
+      filterAgentsForLocalDropoff();
+    } else {
+      setFilteredAgents([]);
+      setFormData(f => ({ ...f, selectedAgent: "" }));
+      setAgentsLoading(false);
+    }
+  }, [formData.serviceType, formData.city_id, formData.address_latitude, formData.address_longitude]);
 
   // Update handleSubmit to save selectedFaults in the booking
   const handleSubmit = async () => {
@@ -538,8 +582,12 @@ export default function BookRepairPage() {
     const canProceedResult = canProceed();
     console.log("➡️ Next step clicked:", { currentStep, canProceed: canProceedResult });
     if (currentStep < steps.length && canProceedResult === true) {
-      setCurrentStep(currentStep + 1);
-      console.log("✅ Moved to step:", currentStep + 1);
+      const next = currentStep + 1;
+      setCurrentStep(next);
+      if (typeof window !== 'undefined') {
+        window.scrollTo(0, 0);
+      }
+      console.log("✅ Moved to step:", next);
     } else {
       console.log("❌ Cannot proceed to next step");
     }
@@ -548,8 +596,12 @@ export default function BookRepairPage() {
   const prevStep = () => {
     console.log("⬅️ Previous step clicked:", { currentStep });
     if (currentStep > 1) {
-      setCurrentStep(currentStep - 1);
-      console.log("✅ Moved to step:", currentStep - 1);
+      const prev = currentStep - 1;
+      setCurrentStep(prev);
+      if (typeof window !== 'undefined') {
+        window.scrollTo(0, 0);
+      }
+      console.log("✅ Moved to step:", prev);
     }
   }
 
@@ -604,12 +656,7 @@ export default function BookRepairPage() {
         return isValid;
       case 3:
         if (formData.serviceType === "local_dropoff") {
-          isValid = Boolean(formData.address_street && formData.address_pincode && formData.selectedAgent);
-          console.log("📋 Step 3 (local_dropoff) validation:", { 
-            location: Boolean(formData.address_street && formData.address_pincode),
-            selectedAgent: Boolean(formData.selectedAgent),
-            isValid: isValid 
-          });
+          isValid = Boolean(formData.selectedAgent);
           return isValid;
         } else if (formData.serviceType === "collection_delivery") {
           isValid = Boolean(
@@ -621,25 +668,12 @@ export default function BookRepairPage() {
             formData.deliveryDate !== undefined &&
             formData.deliveryTime
           );
-          console.log("📋 Step 3 (collection_delivery) validation:", { 
-            selectedAgent: Boolean(formData.selectedAgent),
-            location: Boolean(formData.address_street && formData.address_pincode),
-            collectionDate: Boolean(formData.collectionDate),
-            collectionTime: Boolean(formData.collectionTime),
-            deliveryDate: Boolean(formData.deliveryDate),
-            deliveryTime: Boolean(formData.deliveryTime),
-            isValid: isValid 
-          });
           return isValid;
         } else if (formData.serviceType === "postal") {
-          isValid = Boolean(formData.address_street && formData.address_pincode && formData.city_id);
-          console.log("📋 Step 3 (postal) validation:", { 
-            location: Boolean(formData.address_street && formData.address_pincode && formData.city_id),
-            isValid: isValid 
-          });
+          isValid = Boolean(formData.selectedAgent);
           return isValid;
         }
-        console.log("📋 Step 2 validation: No service type selected");
+        console.log(" Step 2 validation: No service type selected");
         return false;
       case 4:
         isValid = Boolean(formData.duration);
@@ -734,6 +768,83 @@ export default function BookRepairPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData, currentStep, userProfile?.id]);
+
+  // Add error state for agent fetching
+  const [agentsError, setAgentsError] = useState<string>("");
+
+  // Robust agent fetch for local dropoff and postal
+  const fetchAgents = async () => {
+    setAgentsLoading(true);
+    setAgentsError("");
+    setFilteredAgents([]);
+    setFormData(f => ({ ...f, selectedAgent: "" }));
+    console.log("[Agent Fetch] Triggered for:", {
+      city_id: formData.city_id,
+      address_latitude: formData.address_latitude,
+      address_longitude: formData.address_longitude,
+      address_pincode: formData.address_pincode
+    });
+    if (!formData.city_id || !formData.address_latitude || !formData.address_longitude) {
+      setAgentsLoading(false);
+      console.log("[Agent Fetch] Skipped: missing location info");
+      return;
+    }
+    try {
+      const { data: agents, error } = await supabase
+        .from('agents')
+        .select('*')
+        .eq('city_id', formData.city_id)
+        .eq('status', 'approved')
+        .eq('is_online', true)
+        .not('latitude', 'is', null)
+        .not('longitude', 'is', null);
+      if (error) {
+        setFilteredAgents([]);
+        setAgentsError("Something went wrong, please try again");
+        setAgentsLoading(false);
+        console.log("[Agent Fetch] Error:", error);
+        return;
+      }
+      const agentsWithDistance = (agents || []).map(agent => ({
+        ...agent,
+        distance: calculateDistance(
+          formData.address_latitude!,
+          formData.address_longitude!,
+          agent.latitude,
+          agent.longitude
+        )
+      })).sort((a, b) => (a.distance || 0) - (b.distance || 0));
+      setFilteredAgents(agentsWithDistance);
+      setAgentsError("");
+      setAgentsLoading(false);
+      console.log("[Agent Fetch] Success, count:", agentsWithDistance.length);
+    } catch (error) {
+      setFilteredAgents([]);
+      setAgentsError("Something went wrong, please try again");
+      setAgentsLoading(false);
+      console.log("[Agent Fetch] Exception:", error);
+    }
+  };
+
+  // Always trigger agent fetch on address/city/pincode change for local dropoff and postal
+  useEffect(() => {
+    if (formData.serviceType === "local_dropoff" || formData.serviceType === "postal") {
+      fetchAgents();
+    } else {
+      setFilteredAgents([]);
+      setFormData(f => ({ ...f, selectedAgent: "" }));
+      setAgentsLoading(false);
+      setAgentsError("");
+    }
+    // Debug: log current location state
+    console.log("[Agent Fetch Effect] serviceType:", formData.serviceType, "city_id:", formData.city_id, "address_latitude:", formData.address_latitude, "address_longitude:", formData.address_longitude, "address_pincode:", formData.address_pincode);
+  }, [formData.serviceType, formData.city_id, formData.address_latitude, formData.address_longitude, formData.address_pincode]);
+
+  // Add hydration guard
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => { setHydrated(true); }, []);
+
+  if (!hydrated) return null;
 
   return (
     <DashboardLayout>
@@ -1415,6 +1526,10 @@ export default function BookRepairPage() {
                                           <div className="flex items-center justify-center py-8">
                                             <div className="text-muted-foreground">Loading available agents...</div>
                                           </div>
+                                        ) : agentsError ? (
+                                          <div className="border rounded p-6 text-center">
+                                            <div className="text-muted-foreground mb-2">Something went wrong, please try again</div>
+                                          </div>
                                         ) : filteredAgents.length === 0 ? (
                                           <div className="border rounded p-6 text-center">
                                             <div className="text-muted-foreground mb-2">No agents are currently available in the selected city. Please try again later or choose a different service type.</div>
@@ -1537,7 +1652,10 @@ export default function BookRepairPage() {
                                                 mode="single"
                                                 selected={formData.collectionDate}
                                                 onSelect={(date) => setFormData({ ...formData, collectionDate: date })}
-                                                disabled={(date) => date < getMinDate() || date > getMaxDate()}
+                                                disabled={(date) => {
+                                                  if (!minDate || !maxDate) return true;
+                                                  return date < minDate || date > maxDate;
+                                                }}
                                                 initialFocus
                                               />
                                             </PopoverContent>
@@ -1548,47 +1666,6 @@ export default function BookRepairPage() {
                                           <Select
                                             value={formData.collectionTime}
                                             onValueChange={(value) => setFormData({ ...formData, collectionTime: value })}
-                                          >
-                                            <SelectTrigger>
-                                              <SelectValue placeholder="Select time" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                              {getAvailableTimes().map((time) => (
-                                                <SelectItem key={time} value={time}>
-                                                  {time}
-                                                </SelectItem>
-                                              ))}
-                                            </SelectContent>
-                                          </Select>
-                                        </div>
-                                      </div>
-                                      {/* Delivery Date & Time */}
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="space-y-2">
-                                          <Label>Delivery Date</Label>
-                                          <Popover>
-                                            <PopoverTrigger asChild>
-                                              <Button variant="outline" className="w-full justify-start text-left font-normal">
-                                                <CalendarIcon className="mr-2 h-4 w-4" />
-                                                {formData.deliveryDate ? format(formData.deliveryDate, "PPP") : "Pick a date"}
-                                              </Button>
-                                            </PopoverTrigger>
-                                            <PopoverContent className="w-auto p-0">
-                                              <Calendar
-                                                mode="single"
-                                                selected={formData.deliveryDate}
-                                                onSelect={(date) => setFormData({ ...formData, deliveryDate: date })}
-                                                disabled={(date) => date < getMinDate() || date > getMaxDate()}
-                                                initialFocus
-                                              />
-                                            </PopoverContent>
-                                          </Popover>
-                                        </div>
-                                        <div className="space-y-2">
-                                          <Label htmlFor="deliveryTime">Delivery Time</Label>
-                                          <Select
-                                            value={formData.deliveryTime}
-                                            onValueChange={(value) => setFormData({ ...formData, deliveryTime: value })}
                                           >
                                             <SelectTrigger>
                                               <SelectValue placeholder="Select time" />
@@ -1649,13 +1726,88 @@ export default function BookRepairPage() {
                                           <div className="text-blue-600 dark:text-blue-400 text-lg">ℹ️</div>
                                           <div>
                                             <p className="text-sm text-blue-800 dark:text-blue-200 font-medium mb-1">
-                                              Postal Service Information
+                                              How it works
                                             </p>
                                             <p className="text-sm text-blue-700 dark:text-blue-300">
-                                              Our admin will assign the best available agent in your city. You'll receive agent details once assigned.
+                                              Send your device securely to a trusted repair agent in your city. Choose your preferred agent, ship your device, and receive updates until your device is repaired and returned.
                                             </p>
                                           </div>
                                         </div>
+                                      </div>
+                                      {/* Agent Selection (same as Local Dropoff) */}
+                                      <div className="space-y-4">
+                                        <Label className="text-base font-medium">Select a Repair Agent</Label>
+                                        {agentsLoading ? (
+                                          <div className="flex items-center justify-center py-8">
+                                            <div className="text-muted-foreground">Loading available agents...</div>
+                                          </div>
+                                        ) : agentsError ? (
+                                          <div className="border rounded p-6 text-center">
+                                            <div className="text-muted-foreground mb-2">Something went wrong, please try again</div>
+                                          </div>
+                                        ) : filteredAgents.length === 0 ? (
+                                          <div className="border rounded p-6 text-center">
+                                            <div className="text-muted-foreground mb-2">No agents are currently available in the selected city. Please try again later or choose a different service type.</div>
+                                          </div>
+                                        ) :
+                                          <RadioGroup
+                                            value={formData.selectedAgent}
+                                            onValueChange={(value) => setFormData({ ...formData, selectedAgent: value })}
+                                          >
+                                            <div className="space-y-3">
+                                              {filteredAgents.map((agent) => (
+                                                <div
+                                                  key={agent.id}
+                                                  className={`border rounded-lg p-4 cursor-pointer transition-colors ${
+                                                    formData.selectedAgent === agent.id
+                                                      ? "border-primary bg-primary/5"
+                                                      : "border-muted hover:border-muted-foreground/50"
+                                                  }`}
+                                                  onClick={() => setFormData({ ...formData, selectedAgent: agent.id })}
+                                                >
+                                                  <div className="flex items-center space-x-3">
+                                                    <RadioGroupItem value={agent.id} id={agent.id} />
+                                                    <div className="flex-1">
+                                                      <div className="flex items-center justify-between mb-2">
+                                                        <h3 className="font-semibold text-lg">{agent.shop_name}</h3>
+                                                        <Badge variant="secondary" className="text-xs">
+                                                          {agent.distance?.toFixed(2)} miles away
+                                                        </Badge>
+                                                      </div>
+                                                      <div className="space-y-1 text-sm text-muted-foreground">
+                                                        <div className="flex items-center gap-1">
+                                                          <span>👨</span>
+                                                          <span>{agent.name}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-1">
+                                                          <span>📍</span>
+                                                          <span>{agent.shop_address_street}, {agent.shop_address_pincode}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-1">
+                                                          <span>📞</span>
+                                                          <span>{agent.phone}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-1">
+                                                          <span>⭐</span>
+                                                          <span>
+                                                            {agent.rating_average?.toFixed(1) || 'N/A'} ★ 
+                                                            ({agent.rating_count || 0} reviews)
+                                                          </span>
+                                                        </div>
+                                                        {agent.completed_jobs && (
+                                                          <div className="flex items-center gap-1">
+                                                            <span>📊</span>
+                                                            <span>{agent.completed_jobs} completed repairs</span>
+                                                          </div>
+                                                        )}
+                                                      </div>
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </RadioGroup>
+                                        }
                                       </div>
                                     </div>
                                   )}
