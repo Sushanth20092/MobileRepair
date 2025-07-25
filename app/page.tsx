@@ -403,23 +403,26 @@ export default function HomePage() {
             >
               Start Repair Process
             </Button>
-            <Button
-              size="lg"
-              variant="outline"
-              className="px-8 bg-transparent border-primary-foreground text-primary-foreground hover:bg-primary-foreground hover:text-primary"
-              onClick={() => {
-                if (!user) {
-                  toast({
-                    title: "Please register or log in before applying to become an agent.",
-                    variant: "destructive",
-                  })
-                } else {
-                  router.push("/agent/apply")
-                }
-              }}
-            >
-              Join as Agent
-            </Button>
+            {/* Restrict Join as Agent button to only 'user' role or not logged in */}
+            {(!user || user.role === 'user') && (
+              <Button
+                size="lg"
+                variant="outline"
+                className="px-8 bg-transparent border-primary-foreground text-primary-foreground hover:bg-primary-foreground hover:text-primary"
+                onClick={() => {
+                  if (!user) {
+                    toast({
+                      title: "Please register or log in before applying to become an agent.",
+                      variant: "destructive",
+                    })
+                  } else {
+                    router.push("/agent/apply")
+                  }
+                }}
+              >
+                Join as Agent
+              </Button>
+            )}
           </div>
         </div>
       </section>

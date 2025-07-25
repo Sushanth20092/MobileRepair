@@ -25,6 +25,10 @@ export const NotificationBellAdmin: React.FC<NotificationBellAdminProps> = ({ us
   const dropdownRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
+  // Hydration fix: Only render relative time after mount
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => { setIsMounted(true); }, []);
+
   useEffect(() => {
     if (!userId) return;
     setLoading(true);
@@ -103,7 +107,7 @@ export const NotificationBellAdmin: React.FC<NotificationBellAdminProps> = ({ us
               >
                 <div className="font-medium text-gray-900 dark:text-gray-100 text-sm mb-1 line-clamp-1">{n.title}</div>
                 <div className="text-xs text-gray-700 dark:text-gray-300 mb-1 line-clamp-2">{n.message}</div>
-                <div className="text-xs text-muted-foreground">{formatDistanceToNow(new Date(n.created_at), { addSuffix: true })}</div>
+                <div className="text-xs text-muted-foreground">{isMounted ? formatDistanceToNow(new Date(n.created_at), { addSuffix: true }) : "..."}</div>
               </div>
             ))}
           </div>

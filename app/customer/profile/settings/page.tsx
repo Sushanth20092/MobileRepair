@@ -82,6 +82,74 @@ export default function CustomerProfileSettings() {
     }
   }, [confirmPassword, newPassword]);
 
+  // Password validation helper
+  function validatePasswordInputs(currentPassword: string, newPassword: string, confirmPassword: string) {
+    if (!currentPassword || !newPassword || !confirmPassword) return "All fields are required.";
+    if (newPassword.length < 8) return "New password must be at least 8 characters.";
+    if (newPassword === currentPassword) return "New password cannot be the same as the current password.";
+    if (newPassword !== confirmPassword) return "Passwords do not match.";
+    return "";
+  }
+
+  // Change password securely
+  const handlePasswordChange = async () => {
+    // Clear previous messages
+    setPasswordError("");
+    setPasswordSuccess("");
+
+    // Inline validation
+    const validation = validatePasswordInputs(currentPassword, newPassword, confirmPassword);
+    if (validation) {
+      setPasswordError(validation);
+      return;
+    }
+
+    setPasswordLoading(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) {
+        setPasswordError(error.message || "Failed to update password.");
+      } else {
+        setPasswordSuccess("Your password has been changed successfully.");
+        setCurrentPassword("");
+        setNewPassword("");
+        setConfirmPassword("");
+        toast({ title: "Password Changed", description: "Your password has been changed successfully.", variant: "default" });
+      }
+    } catch (err) {
+      setPasswordError((err as any)?.message || "Failed to update password.");
+    } finally {
+      setPasswordLoading(false);
+    }
+  };
+
+  // Logout
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.push("/");
+  };
+
+  // Delete account
+  const handleDelete = async () => {
+    setDeleteLoading(true);
+    setDeleteError("");
+    if (deleteConfirm !== "DELETE") {
+      setDeleteError('You must type "DELETE" to confirm.');
+      setDeleteLoading(false);
+      return;
+    }
+    try {
+      await supabase.from("profiles").delete().eq("id", profile.id);
+      await supabase.auth.signOut();
+      router.push("/");
+    } catch (err: any) {
+      setDeleteError(err.message || "Failed to delete account.");
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  // Restore canChangePassword logic
   const canChangePassword =
     !!currentPassword &&
     !!newPassword &&
@@ -90,40 +158,10 @@ export default function CustomerProfileSettings() {
     !confirmPasswordError &&
     !passwordLoading;
 
-  // Fetch Profile Data
-  useEffect(() => {
-    let mounted = true;
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (user) {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("id, name, avatar_url, email")
-          .eq("id", user.id)
-          .maybeSingle();
-        if (mounted && profile) {
-          setProfile(profile);
-          setName(profile.name || "");
-          setOriginalName(profile.name || "");
-          setAvatarUrl(profile.avatar_url || "");
-        }
-      }
-      if (mounted) setLoading(false);
-    });
-    return () => { mounted = false; };
-  }, []);
-
-  // Validate name on change
-  useEffect(() => {
-    if (nameTouched) {
-      setNameError(validateName(name));
-    }
-  }, [name, nameTouched]);
-
-  // Detect changes
+  // Restore name/profile/handlers logic
   const nameChanged = name.trim() !== originalName.trim();
   const isNameValid = !validateName(name);
 
-  // Avatar file change
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -139,7 +177,6 @@ export default function CustomerProfileSettings() {
     setAvatarPreview(URL.createObjectURL(file));
   };
 
-  // Save name only
   const handleSaveName = async () => {
     setSaving(true);
     setNameError("");
@@ -166,7 +203,6 @@ export default function CustomerProfileSettings() {
     }
   };
 
-  // Save avatar only (or name and avatar together)
   const handleSave = async () => {
     setSaving(true);
     let newAvatarUrl = avatarUrl;
@@ -204,72 +240,36 @@ export default function CustomerProfileSettings() {
     }
   };
 
-  // Cancel name edit
   const handleCancelName = () => {
     setName(originalName);
     setNameTouched(false);
     setNameError("");
   };
 
-  // New password validation
-  function validatePasswordInputs() {
-    if (!currentPassword || !newPassword || !confirmPassword)
-      return "All fields are required.";
-    if (newPassword.length < 8)
-      return "New password must be at least 8 characters.";
-    if (newPassword !== confirmPassword)
-      return "Passwords do not match.";
-    return "";
-  }
-
-  // Change password securely
-  const handlePasswordChange = async () => {
-    setPasswordError("");
-    setPasswordSuccess("");
-    const validation = validatePasswordInputs();
-    if (validation) {
-      setPasswordError(validation);
-      return;
-    }
-    setPasswordLoading(true);
-    // (Optionally: verify current password with backend to prevent session hijacking)
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
-    if (error) {
-      setPasswordError(error.message || "Failed to update password.");
-    } else {
-      setPasswordSuccess("Password updated successfully.");
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-    }
-    setPasswordLoading(false);
-  };
-
-  // Logout
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push("/");
-  };
-
-  // Delete account
-  const handleDelete = async () => {
-    setDeleteLoading(true);
-    setDeleteError("");
-    if (deleteConfirm !== "DELETE") {
-      setDeleteError('You must type "DELETE" to confirm.');
-      setDeleteLoading(false);
-      return;
-    }
-    try {
-      await supabase.from("profiles").delete().eq("id", profile.id);
-      await supabase.auth.signOut();
-      router.push("/");
-    } catch (err: any) {
-      setDeleteError(err.message || "Failed to delete account.");
-    } finally {
-      setDeleteLoading(false);
-    }
-  };
+  // Fetch Profile Data
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getUser().then(async ({ data: { user }, error }) => {
+      if (user) {
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("id, name, avatar_url, email")
+          .eq("id", user.id)
+          .maybeSingle();
+        if (mounted && profile) {
+          setProfile(profile);
+          setName(profile.name || "");
+          setOriginalName(profile.name || "");
+          setAvatarUrl(profile.avatar_url || "");
+        }
+      }
+      // Always unset loading, even if no user or error
+      if (mounted) setLoading(false);
+    }).catch(() => {
+      setLoading(false);
+    });
+    return () => { mounted = false; };
+  }, []);
 
   if (loading) return <div className="p-8 text-center">Loading...</div>;
 

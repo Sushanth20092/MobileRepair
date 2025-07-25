@@ -540,20 +540,27 @@ export default function AdminDashboard() {
     await fetchModels();
   };
 
+  // Hydration fix: Only render locale-dependent content after mount
+  const [isMounted, setIsMounted] = useState(false);
+  useEffect(() => { setIsMounted(true); }, []);
+
+  // Supabase stats fix: Fetch from backend API instead of non-existent stats table
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const { data, error } = await supabase.from('stats').select('*')
-        setStats(data?.[0] || null)
-        setLoading(false)
+        const res = await fetch("/api/admin/dashboard");
+        if (!res.ok) throw new Error("Failed to fetch stats");
+        const json = await res.json();
+        setStats(json.stats || null);
+        setLoading(false);
       } catch {
-        setError("Failed to load dashboard data")
-        setLoading(false)
+        setError("Failed to load dashboard data");
+        setLoading(false);
       }
-    }
-    fetchStats()
+    };
+    fetchStats();
     // Subscribe to stats changes if needed
-  }, [])
+  }, []);
 
   useEffect(() => {
     const fetchAll = async () => {
@@ -1000,9 +1007,6 @@ export default function AdminDashboard() {
           </div>
           <div className="flex items-center gap-2">
             {user?.role === 'admin' && <NotificationBellAdmin userId={user.id} />}
-            <Button variant="outline" onClick={() => router.push("/customer/dashboard")}>
-              Dashboard
-            </Button>
             <button
               onClick={handleLogout}
               className="flex items-center gap-2 px-4 py-2 border rounded text-sm font-medium hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
@@ -1021,7 +1025,7 @@ export default function AdminDashboard() {
               <Users className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{loading ? "..." : stats?.totalUsers?.toLocaleString() ?? 0}</div>
+              <div className="text-2xl font-bold">{isMounted ? stats?.totalUsers?.toLocaleString() : stats?.totalUsers ?? 0}</div>
               {/* Optionally add growth if available */}
             </CardContent>
           </Card>
@@ -1031,8 +1035,8 @@ export default function AdminDashboard() {
               <Wrench className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{loading ? "..." : stats?.totalAgents ?? 0}</div>
-              <p className="text-xs text-muted-foreground">{loading ? "..." : `${stats?.pendingAgents ?? 0} pending requests`}</p>
+              <div className="text-2xl font-bold">{isMounted ? stats?.totalAgents ?? 0 : "..."}</div>
+              <p className="text-xs text-muted-foreground">{isMounted ? `${stats?.pendingAgents ?? 0} pending requests` : "..."}</p>
             </CardContent>
           </Card>
           <Card>
@@ -1041,8 +1045,8 @@ export default function AdminDashboard() {
               <Clock className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{loading ? "..." : stats?.totalBookings ?? 0}</div>
-              <p className="text-xs text-muted-foreground">{loading ? "..." : `${stats?.pendingBookings ?? 0} active, ${stats?.completedBookings ?? 0} completed`}</p>
+              <div className="text-2xl font-bold">{isMounted ? stats?.totalBookings ?? 0 : "..."}</div>
+              <p className="text-xs text-muted-foreground">{isMounted ? `${stats?.pendingBookings ?? 0} active, ${stats?.completedBookings ?? 0} completed` : "..."}</p>
             </CardContent>
           </Card>
           <Card>
@@ -1051,8 +1055,8 @@ export default function AdminDashboard() {
               <DollarSign className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{loading ? "..." : formatGBP(stats?.totalRevenue ?? 0)}</div>
-              <p className="text-xs text-muted-foreground">£{loading ? "..." : formatGBP(stats?.totalRevenue ?? 0)} total</p>
+              <div className="text-2xl font-bold">{isMounted ? formatGBP(stats?.totalRevenue ?? 0) : "..."}</div>
+              <p className="text-xs text-muted-foreground">£{isMounted ? formatGBP(stats?.totalRevenue ?? 0) : "..."} total</p>
             </CardContent>
           </Card>
         </div>
@@ -1060,7 +1064,7 @@ export default function AdminDashboard() {
         {/* Main Content Tabs */}
         <Tabs value={selectedTab} onValueChange={setSelectedTab} className="w-full">
           <TabsList className="grid w-full grid-cols-8">
-            <TabsTrigger value="agent-requests">Agent Requests ({loading ? "..." : stats?.pendingAgents ?? 0})</TabsTrigger>
+            <TabsTrigger value="agent-requests">Agent Requests ({isMounted ? stats?.pendingAgents ?? 0 : "..."})</TabsTrigger>
             <TabsTrigger value="agents">Agents</TabsTrigger>
             <TabsTrigger value="bookings">All Bookings</TabsTrigger>
             <TabsTrigger value="analytics">Analytics</TabsTrigger>
@@ -1128,7 +1132,7 @@ export default function AdminDashboard() {
                             <div><span className="font-medium">City:</span> {getCityName(request.city_id)}</div>
                             <div><span className="font-medium">State:</span> {typeof request.state === 'object' && request.state !== null ? request.state.name : (request.state || 'N/A')}</div>
                             <div><span className="font-medium">Pincode:</span> {request.pincode}</div>
-                            <div><span className="font-medium">Applied:</span> {request.created_at ? new Date(request.created_at).toLocaleString() : 'N/A'}</div>
+                            <div><span className="font-medium">Applied:</span> {isMounted ? new Date(request.created_at).toLocaleString() : 'N/A'}</div>
                           </div>
                           <div className="mb-3">
                             <p className="text-sm font-medium mb-1">Address:</p>
@@ -1151,7 +1155,7 @@ export default function AdminDashboard() {
                             <p className="text-xs text-muted-foreground">Application ID: {request.id}</p>
                             {request.approvedDate && (
                               <p className="text-xs text-green-600">
-                                Approved: {new Date(request.approvedDate).toLocaleDateString()}
+                                Approved: {isMounted ? new Date(request.approvedDate).toLocaleDateString() : "N/A"}
                               </p>
                             )}
                           </div>
@@ -1236,7 +1240,7 @@ export default function AdminDashboard() {
                 <CardDescription>List of all approved agents</CardDescription>
               </CardHeader>
               <CardContent>
-                <AgentsTable agents={agents} cities={cities} getCityName={getCityName} />
+                <AgentsTable agents={agents} cities={cities} getCityName={getCityName} isMounted={isMounted} />
               </CardContent>
             </Card>
           </TabsContent>
@@ -1328,7 +1332,7 @@ export default function AdminDashboard() {
                             </p>
                             <p className="flex items-center gap-1">
                               <Calendar className="h-3 w-3" />
-                              {new Date(booking.date).toLocaleDateString()}
+                              {isMounted ? new Date(booking.date).toLocaleDateString() : ""}
                             </p>
                           </div>
                         </div>
@@ -1672,7 +1676,7 @@ export default function AdminDashboard() {
   )
 }
 
-function AgentsTable({ agents, cities, getCityName }: { agents: any[], cities: any[], getCityName: (id: string) => string }) {
+function AgentsTable({ agents, cities, getCityName, isMounted }: { agents: any[], cities: any[], getCityName: (id: string) => string, isMounted: boolean }) {
   const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null);
   const [states, setStates] = useState<{ id: string; name: string }[]>([]);
   useEffect(() => {
@@ -1759,7 +1763,7 @@ function AgentsTable({ agents, cities, getCityName }: { agents: any[], cities: a
                               <h4 className="font-semibold mb-1">Experience</h4>
                               <p className="text-sm text-muted-foreground mb-2">{agent.experience || 'N/A'}</p>
                               <h4 className="font-semibold mb-1">Last Seen</h4>
-                              <p className="text-sm text-muted-foreground mb-2">{agent.last_seen ? new Date(agent.last_seen).toLocaleString() : 'N/A'}</p>
+                              <p className="text-sm text-muted-foreground mb-2">{isMounted ? (agent.last_seen ? new Date(agent.last_seen).toLocaleString() : 'N/A') : "N/A"}</p>
                             </div>
                             <div>
                               <h4 className="font-semibold mb-1">Earnings Paid</h4>
@@ -1767,9 +1771,9 @@ function AgentsTable({ agents, cities, getCityName }: { agents: any[], cities: a
                               <h4 className="font-semibold mb-1">Earnings Pending</h4>
                               <p className="text-sm text-muted-foreground mb-2">{formatGBP(agent.earnings_pending ?? 0)}</p>
                               <h4 className="font-semibold mb-1">Created At</h4>
-                              <p className="text-sm text-muted-foreground mb-2">{agent.created_at ? new Date(agent.created_at).toLocaleString() : 'N/A'}</p>
+                              <p className="text-sm text-muted-foreground mb-2">{isMounted ? (agent.created_at ? new Date(agent.created_at).toLocaleString() : 'N/A') : "N/A"}</p>
                               <h4 className="font-semibold mb-1">Updated At</h4>
-                              <p className="text-sm text-muted-foreground mb-2">{agent.updated_at ? new Date(agent.updated_at).toLocaleString() : 'N/A'}</p>
+                              <p className="text-sm text-muted-foreground mb-2">{isMounted ? (agent.updated_at ? new Date(agent.updated_at).toLocaleString() : 'N/A') : "N/A"}</p>
                             </div>
                           </div>
                         </div>
