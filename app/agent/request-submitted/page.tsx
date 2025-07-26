@@ -44,7 +44,7 @@ export default function RequestSubmittedPage() {
       <div className="max-w-md w-full mx-auto bg-white border border-gray-200 rounded-xl shadow-xl p-8 text-center flex flex-col items-center">
         <CheckCircle2 className="text-green-500 mb-4" size={56} />
         <h2 className="text-3xl font-bold mb-2 text-gray-900">Request Submitted!</h2>
-        <p className="mb-6 text-gray-700 text-base">Your agent request has been submitted.<br />You'll be notified via email once reviewed.</p>
+        <p className="mb-6 text-gray-700 text-base">Your agent request has been submitted.<br />Our team will review your application and notify you once a decision has been made.</p>
         <Button className="w-full max-w-xs" size="lg" onClick={() => router.push("/")}>Back to Homepage</Button>
       </div>
     </div>

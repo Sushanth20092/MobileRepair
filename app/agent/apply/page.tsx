@@ -923,8 +923,8 @@ function RequestSubmittedMessage() {
   const router = useRouter();
   return (
     <div className="flex flex-col items-center justify-center min-h-[300px]">
-      <h2 className="text-xl font-semibold mb-4">Your agent request has been submitted.</h2>
-      <p className="mb-6 text-center">You'll be notified via email once reviewed.</p>
+      <h2 className="text-xl font-semibold mb-4">Your agent request has been successfully submitted. </h2>
+      <p className="mb-6 text-center">Our team will review your application and notify you once a decision has been made.</p>
       <Button onClick={() => router.push("/")}>Back to Homepage</Button>
     </div>
   );

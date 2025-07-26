@@ -1,19 +1,43 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense, lazy } from "react"
 import { motion } from "framer-motion"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
-import { Smartphone, Tablet, Headphones, Watch, Zap, Shield, Clock, Star, Moon, Sun, Bell } from "lucide-react"
+import { Smartphone, Tablet, Headphones, Watch, Zap, Shield, Clock, Star, Moon, Sun, Bell, Loader2 } from "lucide-react"
 import { useTheme } from "next-themes"
 import Link from "next/link"
 import { useAuth } from "@/contexts/auth-context"
 import { useRouter } from "next/navigation"
 import { useToast } from "@/hooks/use-toast"
 import { supabase } from "@/lib/api"
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow } from "date-fns"
+import { trackApiCall } from "@/lib/performance"
+import LoadingSpinner from "@/components/LoadingSpinner"
+import { SkeletonCard } from "@/components/SkeletonLoader"
+
+// Lazy load non-critical components
+const NotificationDropdown = lazy(() => import('@/components/NotificationDropdown'))
+const ServicesSection = lazy(() => import('@/components/ServicesSection'))
+const HowItWorksSection = lazy(() => import('@/components/HowItWorksSection'))
+const CTASection = lazy(() => import('@/components/CTASection'))
+const Footer = lazy(() => import('@/components/Footer'))
+
+// Debounce utility
+function debounce<T extends (...args: any[]) => any>(func: T, wait: number): T {
+  let timeout: NodeJS.Timeout
+  return ((...args: any[]) => {
+    clearTimeout(timeout)
+    timeout = setTimeout(() => func(...args), wait)
+  }) as T
+}
+
+// Cache for cities data
+let citiesCache: { id: string, name: string, pincodes?: string[] }[] | null = null
+let citiesCacheTime = 0
+const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
 
 const services = [
   {
@@ -50,56 +74,108 @@ export default function HomePage() {
   const { toast } = useToast()
   const [cities, setCities] = useState<{ id: string, name: string, pincodes?: string[] }[]>([])
   const [citiesLoading, setCitiesLoading] = useState(true)
-  const [notifications, setNotifications] = useState<any[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [notifOpen, setNotifOpen] = useState(false);
-  const [notifLoading, setNotifLoading] = useState(false);
+  const [notifications, setNotifications] = useState<any[]>([])
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [notifLoading, setNotifLoading] = useState(false)
+  const [isRepairButtonLoading, setIsRepairButtonLoading] = useState(false)
+  const [isAgentButtonLoading, setIsAgentButtonLoading] = useState(false)
+
+  // Optimized cities fetching with caching
+  const fetchCities = async () => {
+    try {
+      // Check cache first
+      if (citiesCache && Date.now() - citiesCacheTime < CACHE_DURATION) {
+        setCities(citiesCache)
+        setCitiesLoading(false)
+        return
+      }
+
+      const citiesData = await trackApiCall('fetch_cities', async () => {
+        const response = await fetch('/api/cities')
+        if (!response.ok) {
+          throw new Error('Failed to fetch cities')
+        }
+        
+        const result = await response.json()
+        return result.data || []
+      })
+      
+      setCities(citiesData)
+      // Update cache
+      citiesCache = citiesData
+      citiesCacheTime = Date.now()
+    } catch (err) {
+      console.error("Unexpected error:", err)
+      toast({
+        title: "Error loading cities",
+        description: "Please refresh the page to try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setCitiesLoading(false)
+    }
+  }
+
+  // Optimized notifications fetching
+  const fetchNotifications = async () => {
+    if (!user) return
+    
+    setNotifLoading(true)
+    try {
+      const result = await trackApiCall('fetch_notifications', async () => {
+        const response = await fetch(`/api/notifications?userId=${user.id}&limit=7`)
+        if (!response.ok) {
+          throw new Error('Failed to fetch notifications')
+        }
+        
+        return await response.json()
+      })
+      
+      setNotifications(result.data || [])
+      setUnreadCount(result.unreadCount || 0)
+    } catch (err) {
+      console.error("Error fetching notifications:", err)
+    } finally {
+      setNotifLoading(false)
+    }
+  }
+
+  // Debounced scroll handler
+  const debouncedScrollToSection = debounce((sectionId: string) => {
+    const element = document.getElementById(sectionId)
+    if (element) {
+      element.scrollIntoView({ behavior: "smooth" })
+    }
+  }, 100)
 
   useEffect(() => {
     setMounted(true)
-    const fetchCities = async () => {
-      try {
-        const { data, error } = await supabase.from('cities').select('*')
-        if (error) {
-          console.error("Error fetching cities:", error)
-        } else {
-          setCities(data || [])
-        }
-      } catch (err) {
-        console.error("Unexpected error:", err)
-      } finally {
-        setCitiesLoading(false)
-      }
-    }
     fetchCities()
   }, [])
 
   useEffect(() => {
-    if (!user) return;
-    setNotifLoading(true);
-    supabase
-      .from("notifications")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(7)
-      .then(({ data }) => {
-        setNotifications(data || []);
-        setUnreadCount((data || []).filter((n: any) => !n.is_read).length);
-        setNotifLoading(false);
-      });
-  }, [user, notifOpen]);
+    if (user && notifOpen) {
+      fetchNotifications()
+    }
+  }, [user, notifOpen])
 
   const handleMarkAsRead = async (id: string) => {
-    await supabase.from("notifications").update({ is_read: true }).eq("id", id);
-    setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, is_read: true } : n));
-    setUnreadCount((prev) => Math.max(0, prev - 1));
-  };
-
-  const scrollToSection = (sectionId: string) => {
-    const element = document.getElementById(sectionId)
-    if (element) {
-      element.scrollIntoView({ behavior: "smooth" })
+    try {
+      const response = await fetch('/api/notifications', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ id }),
+      })
+      
+      if (response.ok) {
+        setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, is_read: true } : n))
+        setUnreadCount((prev) => Math.max(0, prev - 1))
+      }
+    } catch (error) {
+      console.error("Error marking notification as read:", error)
     }
   }
 
@@ -107,19 +183,50 @@ export default function HomePage() {
     router.push("/auth/login")
   }
 
-  const handleRepairNow = () => {
-    if (!user) {
-      router.push("/auth/login")
-    } else if (user.role === 'admin') {
-      router.push("/admin/dashboard")
-    } else if (user.role === 'agent') {
-      router.push("/agent/dashboard")
-    } else {
-      router.push("/customer/book-repair")
+  const handleRepairNow = async () => {
+    if (isRepairButtonLoading) return // Prevent double clicks
+    
+    setIsRepairButtonLoading(true)
+    try {
+      if (!user) {
+        router.push("/auth/login")
+      } else if (user.role === 'admin') {
+        router.push("/admin/dashboard")
+      } else if (user.role === 'agent') {
+        router.push("/agent/dashboard")
+      } else {
+        router.push("/customer/book-repair")
+      }
+    } finally {
+      setIsRepairButtonLoading(false)
     }
   }
 
-  if (!mounted) return null
+  const handleAgentApply = async () => {
+    if (isAgentButtonLoading) return // Prevent double clicks
+    
+    setIsAgentButtonLoading(true)
+    try {
+      if (!user) {
+        toast({
+          title: "Please register or log in before applying to become an agent.",
+          variant: "destructive",
+        })
+      } else {
+        router.push("/agent/apply")
+      }
+    } finally {
+      setIsAgentButtonLoading(false)
+    }
+  }
+
+  if (!mounted) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin" />
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -135,19 +242,19 @@ export default function HomePage() {
 
           <nav className="hidden md:flex items-center space-x-6">
             <button
-              onClick={() => scrollToSection("services")}
+              onClick={() => debouncedScrollToSection("services")}
               className="text-sm font-medium hover:text-primary transition-colors"
             >
               Our Services
             </button>
             <button
-              onClick={() => scrollToSection("how-it-works")}
+              onClick={() => debouncedScrollToSection("how-it-works")}
               className="text-sm font-medium hover:text-primary transition-colors"
             >
               How It Works
             </button>
             <button
-              onClick={() => scrollToSection("contact")}
+              onClick={() => debouncedScrollToSection("contact")}
               className="text-sm font-medium hover:text-primary transition-colors"
             >
               Contact
@@ -158,48 +265,21 @@ export default function HomePage() {
             <Button variant="ghost" size="icon" onClick={() => setTheme(theme === "light" ? "dark" : "light")}>
               {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
             </Button>
+            
             {user && user.role === 'user' && (
-              <div className="relative">
-                <button
-                  className="relative p-2 rounded-full hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary"
-                  onClick={() => setNotifOpen((o) => !o)}
-                  aria-label="Notifications"
-                >
-                  <Bell className="h-6 w-6 text-gray-200" />
-                  {unreadCount > 0 && (
-                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
-                      {unreadCount}
-                    </span>
-                  )}
-                </button>
-                {/* Dropdown */}
-                {notifOpen && (
-                  <div className="absolute right-0 mt-2 w-80 max-w-[95vw] bg-background border border-gray-700 rounded-lg shadow-2xl z-50 overflow-hidden">
-                    <div className="p-3 border-b border-gray-700 font-semibold text-gray-100 flex items-center justify-between bg-gray-900">
-                      Notifications
-                      <button className="text-xs text-muted-foreground hover:underline" onClick={() => setNotifOpen(false)}>Close</button>
-                    </div>
-                    <div className="max-h-96 overflow-y-auto divide-y divide-gray-800 bg-gray-900">
-                      {notifLoading ? (
-                        <div className="p-4 text-center text-muted-foreground">Loading...</div>
-                      ) : notifications.length === 0 ? (
-                        <div className="p-4 text-center text-muted-foreground">No notifications</div>
-                      ) : notifications.map((n) => (
-                        <div
-                          key={n.id}
-                          className={`p-3 cursor-pointer hover:bg-gray-800 transition flex flex-col ${!n.is_read ? "bg-blue-900/30" : ""}`}
-                          onClick={() => handleMarkAsRead(n.id)}
-                        >
-                          <div className="font-medium text-gray-100 text-sm mb-1 line-clamp-1">{n.title}</div>
-                          <div className="text-xs text-gray-300 mb-1 line-clamp-2">{n.message}</div>
-                          <div className="text-xs text-muted-foreground">{formatDistanceToNow(new Date(n.created_at), { addSuffix: true })}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+              <Suspense fallback={<LoadingSpinner />}>
+                <NotificationDropdown
+                  notifications={notifications}
+                  unreadCount={unreadCount}
+                  notifOpen={notifOpen}
+                  notifLoading={notifLoading}
+                  onToggle={() => setNotifOpen((o) => !o)}
+                  onMarkAsRead={handleMarkAsRead}
+                  onClose={() => setNotifOpen(false)}
+                />
+              </Suspense>
             )}
+            
             {user ? (
               <>
                 {user.role === 'user' && (
@@ -208,27 +288,28 @@ export default function HomePage() {
                   </Button>
                 )}
                 {(user.role === 'agent' || user.role === 'admin') && (
-                  <Button variant="outline" onClick={() => {
-                    if (user.role === 'agent') {
-                      router.push("/agent/dashboard")
-                    } else if (user.role === 'admin') {
-                      router.push("/admin/dashboard")
-                    }
-                  }}>Dashboard</Button>
+                  <Button 
+                    variant="outline" 
+                    onClick={() => {
+                      if (user.role === 'agent') {
+                        router.push("/agent/dashboard")
+                      } else if (user.role === 'admin') {
+                        router.push("/admin/dashboard")
+                      }
+                    }}
+                  >
+                    Dashboard
+                  </Button>
                 )}
                 <Button
                   variant="destructive"
-                  onClick={() => {
-                    logout()
-                  }}
+                  onClick={logout}
                 >
                   Logout
                 </Button>
               </>
             ) : (
-              <Button
-                onClick={handleLoginRedirect}
-              >
+              <Button onClick={handleLoginRedirect}>
                 Login
               </Button>
             )}
@@ -275,9 +356,14 @@ export default function HomePage() {
               size="lg"
               className="px-8"
               onClick={handleRepairNow}
+              disabled={isRepairButtonLoading}
             >
-              <Zap className="mr-2 h-4 w-4" />
-              Repair Now
+              {isRepairButtonLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Zap className="mr-2 h-4 w-4" />
+              )}
+              {isRepairButtonLoading ? "Loading..." : "Repair Now"}
             </Button>
           </motion.div>
 
@@ -304,179 +390,46 @@ export default function HomePage() {
       </section>
 
       {/* Services Section */}
-      <section id="services" className="py-20 px-4 bg-muted/50">
-        <div className="container mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl md:text-4xl font-bold mb-4">Our Services</h2>
-            <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-              We repair all types of mobile devices with expert care and genuine parts
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {services.map((service, index) => (
-              <motion.div
-                key={index}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5, delay: index * 0.1 }}
-              >
-                <Card className="h-full hover:shadow-lg transition-shadow">
-                  <CardHeader>
-                    <div className="text-primary mb-4">{service.icon}</div>
-                    <CardTitle className="text-xl">{service.title}</CardTitle>
-                    <CardDescription>{service.description}</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-2">
-                      {service.features.map((feature, idx) => (
-                        <Badge key={idx} variant="secondary" className="mr-2 mb-2">
-                          {feature}
-                        </Badge>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* How It Works Section */}
-      <section id="how-it-works" className="py-20 px-4">
-        <div className="container mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl md:text-4xl font-bold mb-4">How It Works</h2>
-            <p className="text-xl text-muted-foreground max-w-2xl mx-auto">Simple steps to get your device repaired</p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            {[
-              {
-                step: "1",
-                title: "Book Online",
-                description: "Select your device, describe the issue, and choose your preferred service option",
-              },
-              {
-                step: "2",
-                title: "Get It Fixed",
-                description: "Our expert technicians diagnose and repair your device using genuine parts",
-              },
-              {
-                step: "3",
-                title: "Collect & Enjoy",
-                description: "Pick up your repaired device or get it delivered to your doorstep",
-              },
-            ].map((item, index) => (
-              <motion.div
-                key={index}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5, delay: index * 0.2 }}
-                className="text-center"
-              >
-                <div className="w-16 h-16 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-4">
-                  {item.step}
-                </div>
-                <h3 className="text-xl font-semibold mb-2">{item.title}</h3>
-                <p className="text-muted-foreground">{item.description}</p>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* CTA Section */}
-      <section className="py-20 px-4 bg-primary text-primary-foreground">
-        <div className="container mx-auto text-center">
-          <h2 className="text-3xl md:text-4xl font-bold mb-4">Ready to Get Your Device Fixed?</h2>
-          <p className="text-xl mb-8 opacity-90">
-            Join thousands of satisfied customers who trust us with their devices
-          </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Button 
-              size="lg" 
-              variant="secondary" 
-              className="px-8"
-              onClick={handleRepairNow}
-            >
-              Start Repair Process
-            </Button>
-            {/* Restrict Join as Agent button to only 'user' role or not logged in */}
-            {(!user || user.role === 'user') && (
-              <Button
-                size="lg"
-                variant="outline"
-                className="px-8 bg-transparent border-primary-foreground text-primary-foreground hover:bg-primary-foreground hover:text-primary"
-                onClick={() => {
-                  if (!user) {
-                    toast({
-                      title: "Please register or log in before applying to become an agent.",
-                      variant: "destructive",
-                    })
-                  } else {
-                    router.push("/agent/apply")
-                  }
-                }}
-              >
-                Join as Agent
-              </Button>
-            )}
-          </div>
-        </div>
-      </section>
-
-      {/* Footer */}
-      <footer id="contact" className="py-12 px-4 bg-muted">
-        <div className="container mx-auto">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-            <div>
-              <div className="flex items-center space-x-2 mb-4">
-                <Smartphone className="h-6 w-6" />
-                <span className="font-bold text-xl">RepairHub</span>
-              </div>
-              <p className="text-muted-foreground">
-                Professional mobile device repair services with expert technicians and genuine parts.
+      <Suspense fallback={
+        <section className="py-20 px-4 bg-muted/50">
+          <div className="container mx-auto">
+            <div className="text-center mb-16">
+              <h2 className="text-3xl md:text-4xl font-bold mb-4">Our Services</h2>
+              <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
+                We repair all types of mobile devices with expert care and genuine parts
               </p>
             </div>
-
-            <div>
-              <h3 className="font-semibold mb-4">Services</h3>
-              <ul className="space-y-2 text-muted-foreground">
-                <li>Mobile Repair</li>
-                <li>Tablet Repair</li>
-                <li>Audio Devices</li>
-                <li>Smartwatch Repair</li>
-              </ul>
-            </div>
-
-            <div>
-              <h3 className="font-semibold mb-4">Support</h3>
-              <ul className="space-y-2 text-muted-foreground">
-                <li>Contact Us</li>
-                <li>FAQ</li>
-                <li>Warranty</li>
-                <li>Track Repair</li>
-              </ul>
-            </div>
-
-            <div>
-              <h3 className="font-semibold mb-4">Connect</h3>
-              <ul className="space-y-2 text-muted-foreground">
-                <li>About Us</li>
-                <li>Careers</li>
-                <li>Privacy Policy</li>
-                <li>Terms of Service</li>
-              </ul>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {[...Array(4)].map((_, i) => (
+                <SkeletonCard key={i} />
+              ))}
             </div>
           </div>
+        </section>
+      }>
+        <ServicesSection services={services} />
+      </Suspense>
 
-          <div className="border-t mt-8 pt-8 text-center text-muted-foreground">
-            <p>&copy; 2024 RepairHub. All rights reserved.</p>
-          </div>
-        </div>
-      </footer>
+      {/* How It Works Section */}
+      <Suspense fallback={<LoadingSpinner />}>
+        <HowItWorksSection />
+      </Suspense>
+
+      {/* CTA Section */}
+      <Suspense fallback={<LoadingSpinner />}>
+        <CTASection 
+          user={user}
+          onRepairNow={handleRepairNow}
+          onAgentApply={handleAgentApply}
+          isRepairButtonLoading={isRepairButtonLoading}
+          isAgentButtonLoading={isAgentButtonLoading}
+        />
+      </Suspense>
+
+      {/* Footer */}
+      <Suspense fallback={<LoadingSpinner />}>
+        <Footer />
+      </Suspense>
     </div>
   )
 }
