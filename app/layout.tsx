@@ -29,7 +29,6 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         {/* Preload critical resources */}
-        <link rel="preload" href="/styles/globals.css" as="style" />
         <link 
           rel="preload" 
           href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" 
